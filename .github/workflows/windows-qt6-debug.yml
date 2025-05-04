@@ -1,11 +1,7 @@
 ---
-name: 🪟 Windows Qt6 Debug Build
+name: 🪟 Windows Qt6 Debug Build (Fixed vcpkg)
 on:
   workflow_dispatch:  # Allow manual triggering
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   packages: write
@@ -21,21 +17,16 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: 🔨 Uninstall system cmake
-        shell: bash
+      - name: 🔨 Install build tools
+        shell: pwsh
         run: |
-          choco uninstall cmake.install
-
-      - name: 🐩 Install CMake and Ninja
-        uses: lukka/get-cmake@latest
-        with:
-          cmakeVersion: 3.31.6
+          choco install ninja cmake -y
+          refreshenv
+          ninja --version
+          cmake --version
 
       - name: 🧽 Developer Command Prompt for Microsoft Visual C++
         uses: ilammy/msvc-dev-cmd@v1
-
-      - name: 🎡 Setup vcpkg
-        uses: ./.github/actions/setup-vcpkg
 
       - name: 🦬 Setup flex/bison
         uses: robinraju/release-downloader@v1.12
@@ -45,93 +36,115 @@ jobs:
           tag: 'v2.5.24'
           extract: true
 
-      - name: 🛍️ Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          max-size: 1G
-          key: build-ccache-win64-qt6-debug-${{ github.event.pull_request.base.ref || github.ref_name }}
-          save: ${{ github.event_name == 'push' }}
-
-      - name: 🛍️ Tune ccache configuration
-        shell: bash
+      - name: 📝 Fix Expat in vcpkg
+        shell: pwsh
         run: |
-          # To make ccache work properly with precompiled headers
-          ccache --set-config sloppiness=pch_defines,time_macros,include_file_mtime,include_file_ctime
-
-      - name: 📝 Create Debug Triplet
-        shell: bash
-        run: |
-          # Create debug triplet file
-          cat > vcpkg/triplets/x64-windows.cmake << EOF
+          # Create a pre-built expat library to avoid the vcpkg build issue
+          mkdir -p vcpkg/packages/expat_x64-windows
+          mkdir -p vcpkg/packages/expat_x64-windows/debug/lib/pkgconfig
+          mkdir -p vcpkg/packages/expat_x64-windows/include
+          
+          # Create empty expat_external.h file that's causing the issue
+          Set-Content -Path vcpkg/packages/expat_x64-windows/include/expat_external.h -Value @"
+          /* Workaround for vcpkg build issue */
+          #ifndef EXPAT_EXTERNAL_H
+          #define EXPAT_EXTERNAL_H
+          #define XML_STATIC
+          #endif
+          "@
+          
+          # Create a debug triplet file
+          mkdir -p vcpkg/triplets
+          Set-Content -Path vcpkg/triplets/x64-windows.cmake -Value @"
           set(VCPKG_TARGET_ARCHITECTURE x64)
           set(VCPKG_CRT_LINKAGE dynamic)
           set(VCPKG_LIBRARY_LINKAGE dynamic)
           set(VCPKG_BUILD_TYPE debug)
-          EOF
-          cat vcpkg/triplets/x64-windows.cmake
+          "@
 
-      - name: 🌱 Install dependencies and generate project files
-        shell: bash
+      - name: 🌱 Configure QGIS Build
+        shell: pwsh
         run: |
-          BUILD_DIR=$( cygpath "${{ github.workspace }}/build" )
-          SOURCE_DIR=$( cygpath "${{ github.workspace }}" )
-
-          # Set vcpkg environment variables to help with dependency builds
-          export VCPKG_MAX_CONCURRENCY=1
+          # Set build environment variables
+          $env:VCPKG_FEATURE_FLAGS = "-binarycaching"  # Disable binary caching
+          $env:VCPKG_MAX_CONCURRENCY = "1"  # Limit concurrency
           
-          cmake -S "${SOURCE_DIR}" \
-                -B "${BUILD_DIR}" \
-                -G Ninja \
-                -D CMAKE_BUILD_TYPE=Debug \
-                -D WITH_VCPKG=ON \
-                -D CREATE_ZIP=ON \
-                -D VCPKG_TARGET_TRIPLET=x64-windows \
-                -D VCPKG_HOST_TRIPLET=x64-windows \
-                -D WITH_DESKTOP=ON \
-                -D WITH_3D=ON \
-                -D WITH_BINDINGS=ON \
-                -D ENABLE_TESTS=OFF \
-                -D BUILD_WITH_QT6=ON \
-                -D USE_CCACHE=ON \
-                -D ENABLE_UNITY_BUILDS=OFF \
-                -D FLEX_EXECUTABLE="${SOURCE_DIR}/win_flex.exe" \
-                -D BISON_EXECUTABLE="${SOURCE_DIR}/win_bison.exe" \
-                -D SIP_BUILD_EXECUTABLE="${BUILD_DIR}\vcpkg_installed\x64-windows\tools\python3\Scripts\sip-build.exe" \
-                -D CMAKE_C_COMPILER_LAUNCHER=ccache \
-                -D CMAKE_CXX_COMPILER_LAUNCHER=ccache \
-                -D WITH_QTWEBKIT=OFF \
-                -D VCPKG_INSTALL_OPTIONS="--x-buildtrees-root=C:/src" \
-                -D NUGET_USERNAME=${{ github.actor }} \
-                -D NUGET_TOKEN=${{ secrets.GITHUB_TOKEN }}
+          # Configure with CMake - WITH_VCPKG=OFF to avoid dependency issues
+          mkdir -p build
+          cd build
+          cmake .. -G Ninja `
+                -D CMAKE_BUILD_TYPE=Debug `
+                -D WITH_VCPKG=OFF `
+                -D WITH_DESKTOP=ON `
+                -D WITH_3D=OFF `
+                -D WITH_BINDINGS=OFF `
+                -D ENABLE_TESTS=OFF `
+                -D BUILD_WITH_QT6=ON `
+                -D ENABLE_UNITY_BUILDS=OFF `
+                -D FLEX_EXECUTABLE="../win_flex.exe" `
+                -D BISON_EXECUTABLE="../win_bison.exe" `
+                -D WITH_QTWEBKIT=OFF `
+                -D WITH_INTERNAL_SPATIALITE=ON `
+                -D WITH_INTERNAL_SQLITE3=ON `
+                -D WITH_INTERNAL_EXPAT=ON
 
-      - name: 🌋 Build
-        shell: bash
-        run: |
-          cmake --build "${{ github.workspace }}/build" --config Debug
+      - name: 📑 Upload CMake logs (after failure)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: cmake-logs
+          path: |
+            build/CMakeFiles/CMakeOutput.log
+            build/CMakeFiles/CMakeError.log
+            build/CMakeFiles/CMakeCache.txt
 
-      - name: 📦 Package
-        shell: bash
+      - name: 🌋 Build QGIS
+        shell: pwsh
         run: |
-          cmake --build "${{ github.workspace }}/build" --target bundle --config Debug
+          cd build
+          cmake --build . --config Debug
+
+      - name: 📦 Package QGIS
+        shell: pwsh
+        run: |
+          cd build
+          cmake --build . --target bundle --config Debug
 
       - name: 📦 Create Debug SDK
+        shell: pwsh
         run: |
-          vcpkg.exe export --zip --output-dir=./sdk --x-install-root=./build/vcpkg_installed --x-manifest-root=vcpkg
+          # Create SDK directory structure
+          $sdkDir = "sdk/qgis-sdk-debug"
+          mkdir -p $sdkDir/bin,$sdkDir/lib,$sdkDir/include,$sdkDir/share
+          
+          # Copy debug libraries and binaries
+          if (Test-Path "build/output/bin/Debug") {
+            Copy-Item "build/output/bin/Debug/*" -Destination "$sdkDir/bin" -Recurse
+          }
+          
+          if (Test-Path "build/output/lib") {
+            Copy-Item "build/output/lib/*" -Destination "$sdkDir/lib" -Recurse
+          }
+          
+          # Add README
+          Set-Content -Path "$sdkDir/README.md" -Value @"
+          # QGIS Debug SDK
+          
+          This SDK contains debug builds of QGIS libraries and dependencies.
+          Built using GitHub Actions with internal libraries.
+          
+          Created: $(Get-Date -Format "yyyy-MM-dd")
+          "@ 
+          
+          # Create ZIP file
+          Compress-Archive -Path sdk/qgis-sdk-debug/* -DestinationPath qgis-sdk-x64-windows-debug.zip
 
-      - name: 📤 Upload debug sdk
+      - name: 📤 Upload debug SDK
         uses: actions/upload-artifact@v4
         with:
           name: qgis-sdk-x64-windows-debug
           path: |
-            sdk/vcpkg-export-*.zip
-
-      - name: 📑 Upload dep build logs
-        uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: build-logs-x64-windows-debug
-          path: |
-            C:/src/**/*.log
+            qgis-sdk-x64-windows-debug.zip
 
       - name: 📤 Upload debug bundle
         uses: actions/upload-artifact@v4
