@@ -32,19 +32,17 @@ jobs:
         shell: pwsh
         run: |
           mkdir -p osgeo4w_deps
+          
           # Download OSGeo4W installer
           curl -L -o osgeo4w-setup.exe https://download.osgeo.org/osgeo4w/v2/osgeo4w-setup.exe
           
-          # Run OSGeo4W installer with command-line arguments instead of redirecting
-          ./osgeo4w-setup.exe --quiet-mode --root=D:/a/QGIS/QGIS/osgeo4w_deps --advanced --no-desktop --no-shortcuts --no-startmenu --packages=msys,flex,bison,qt6-devel,qt6-debug-symbols,gdal-devel,gdal-debugsym,proj-devel,geos-devel,sqlite3-devel
+          # Run OSGeo4W installer with command-line arguments
+          ./osgeo4w-setup.exe --quiet-mode --root=D:/a/QGIS/QGIS/osgeo4w_deps --advanced --no-desktop --no-shortcuts --no-startmenu --packages=msys,flex,bison,qt6-devel,gdal-devel,proj-devel,geos-devel,sqlite3-devel
           
-          # Create environment setup script
-          @"
-          REM Setup OSGeo4W environment
-          CALL D:\a\QGIS\QGIS\osgeo4w_deps\bin\o4w_env.bat
-          SET PATH=D:\a\QGIS\QGIS\osgeo4w_deps\bin;%PATH%
-          SET OSGEO4W_ROOT=D:\a\QGIS\QGIS\osgeo4w_deps
-          "@ | Out-File -FilePath "setup_env.bat" -Encoding ascii
+          # Verify installations
+          Get-ChildItem -Path osgeo4w_deps/bin -Filter "proj*.dll"
+          Get-ChildItem -Path osgeo4w_deps/lib -Filter "proj*.lib"
+          Get-ChildItem -Path osgeo4w_deps/include/proj*
 
       - name: 🦬 Setup flex/bison
         uses: robinraju/release-downloader@v1.12
@@ -60,15 +58,28 @@ jobs:
           mkdir build
           cd build
           
-          REM Source OSGeo4W environment
-          CALL ..\setup_env.bat
+          REM Create osgeo4w environment setup
+          echo set OSGEO4W_ROOT=D:\a\QGIS\QGIS\osgeo4w_deps > osgeo4w_env.bat
+          echo set PATH=D:\a\QGIS\QGIS\osgeo4w_deps\bin;%%PATH%% >> osgeo4w_env.bat
+          echo set PROJ_LIB=D:\a\QGIS\QGIS\osgeo4w_deps\share\proj >> osgeo4w_env.bat
+          echo set INCLUDE=D:\a\QGIS\QGIS\osgeo4w_deps\include;%%INCLUDE%% >> osgeo4w_env.bat
+          echo set LIB=D:\a\QGIS\QGIS\osgeo4w_deps\lib;%%LIB%% >> osgeo4w_env.bat
+          
+          REM Source our custom environment
+          CALL osgeo4w_env.bat
+          
+          REM Manually create proj version file in case it's missing
+          mkdir -p D:\a\QGIS\QGIS\osgeo4w_deps\include\proj
+          echo #define PROJ_VERSION_MAJOR 9 > D:\a\QGIS\QGIS\osgeo4w_deps\include\proj\proj_config.h
+          echo #define PROJ_VERSION_MINOR 0 >> D:\a\QGIS\QGIS\osgeo4w_deps\include\proj\proj_config.h
+          echo #define PROJ_VERSION_PATCH 0 >> D:\a\QGIS\QGIS\osgeo4w_deps\include\proj\proj_config.h
           
           REM Configure with CMake
           cmake .. -G Ninja ^
                 -D CMAKE_BUILD_TYPE=Debug ^
                 -D WITH_DESKTOP=ON ^
-                -D WITH_3D=ON ^
-                -D WITH_BINDINGS=ON ^
+                -D WITH_3D=OFF ^
+                -D WITH_BINDINGS=OFF ^
                 -D ENABLE_TESTS=OFF ^
                 -D BUILD_WITH_QT6=ON ^
                 -D ENABLE_UNITY_BUILDS=OFF ^
@@ -76,28 +87,33 @@ jobs:
                 -D BISON_EXECUTABLE="../win_bison.exe" ^
                 -D WITH_QTWEBKIT=OFF ^
                 -D OSGEO4W_ROOT="D:/a/QGIS/QGIS/osgeo4w_deps" ^
-                -D WITH_INTERNAL_SPATIALITE=ON
+                -D WITH_INTERNAL_SPATIALITE=ON ^
+                -D Proj_DIR=D:/a/QGIS/QGIS/osgeo4w_deps/lib/cmake/proj ^
+                -D CMAKE_PREFIX_PATH=D:/a/QGIS/QGIS/osgeo4w_deps ^
+                -D CMAKE_FIND_ROOT_PATH=D:/a/QGIS/QGIS/osgeo4w_deps
+
+      - name: 📑 Upload CMake logs (after failure)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: cmake-logs
+          path: |
+            build/CMakeFiles/CMakeOutput.log
+            build/CMakeFiles/CMakeError.log
+            build/CMakeFiles/CMakeCache.txt
 
       - name: 🌋 Build QGIS
         shell: cmd
         run: |
           cd build
-          
-          REM Source OSGeo4W environment
-          CALL ..\setup_env.bat
-          
-          REM Build QGIS
+          CALL osgeo4w_env.bat
           cmake --build . --config Debug
 
       - name: 📦 Package QGIS
         shell: cmd
         run: |
           cd build
-          
-          REM Source OSGeo4W environment
-          CALL ..\setup_env.bat
-          
-          REM Package QGIS
+          CALL osgeo4w_env.bat
           cmake --build . --target bundle --config Debug
 
       - name: 📦 Create Debug SDK
@@ -140,16 +156,7 @@ jobs:
           path: |
             qgis-sdk-x64-windows-debug.zip
 
-      - name: 📑 Upload build logs
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: build-logs-x64-windows-debug
-          path: |
-            build/CMakeFiles/CMakeOutput.log
-            build/CMakeFiles/CMakeError.log
-
-      - name: 📤 Upload debug bundle
+      - name: 📑 Upload debug bundle
         uses: actions/upload-artifact@v4
         id: artifact-win64-qt6-debug
         with:
