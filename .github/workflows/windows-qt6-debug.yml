@@ -1,5 +1,5 @@
 ---
-name: 🪟 Windows MinGW Debug Build (Fixed)
+name: 🪟 Windows MinGW Debug Build (Minimal)
 on:
   workflow_dispatch:  # Allow manual triggering
 
@@ -25,38 +25,27 @@ jobs:
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-qt6-base
-            mingw-w64-x86_64-qt6-declarative
-            mingw-w64-x86_64-qt6-tools
-            mingw-w64-x86_64-qt6-3d
-            mingw-w64-x86_64-qt6-positioning
-            mingw-w64-x86_64-qt6-svg
-            mingw-w64-x86_64-qt6-serialport
             mingw-w64-x86_64-proj
             mingw-w64-x86_64-gdal
             mingw-w64-x86_64-geos
             mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-python
-            mingw-w64-x86_64-python-pip
-            mingw-w64-x86_64-python-numpy
-            mingw-w64-x86_64-python-pyqt6
-            mingw-w64-x86_64-winflexbison
             mingw-w64-x86_64-ccache
-            mingw-w64-x86_64-exiv2
-            mingw-w64-x86_64-expat
-            mingw-w64-x86_64-spatialindex
-            mingw-w64-x86_64-libzip
+            flex
+            bison
 
-      - name: 🔍 Check installed packages
+      - name: 🔍 Check available packages
         shell: msys2 {0}
         run: |
-          echo "Checking package versions..."
-          pacman -Q | grep proj
-          pacman -Q | grep gdal
-          pacman -Q | grep winflexbison
-          pacman -Q | grep spatialindex
+          echo "Searching for flex and bison packages..."
+          pacman -Ss flex
+          pacman -Ss bison
           
           echo "Checking PROJ is functional..."
           pkg-config --modversion proj
+          
+          echo "Current directory contents:"
+          ls -la
 
       - name: 🌱 Configure QGIS Build
         shell: msys2 {0}
@@ -65,17 +54,18 @@ jobs:
           mkdir -p build
           cd build
           
-          # Configure with CMake for Debug build
+          # Configure with CMake for Debug build - minimal config
           cmake .. -G Ninja \
                 -D CMAKE_BUILD_TYPE=Debug \
                 -D WITH_DESKTOP=ON \
-                -D WITH_3D=ON \
-                -D WITH_BINDINGS=ON \
+                -D WITH_3D=OFF \
+                -D WITH_BINDINGS=OFF \
                 -D ENABLE_TESTS=OFF \
                 -D BUILD_WITH_QT6=ON \
                 -D ENABLE_UNITY_BUILDS=OFF \
-                -D FLEX_EXECUTABLE="/mingw64/bin/win_flex.exe" \
-                -D BISON_EXECUTABLE="/mingw64/bin/win_bison.exe"
+                -D WITH_GRASS=OFF \
+                -D WITH_CUSTOM_WIDGETS=OFF \
+                -D WITH_SERVER=OFF
 
       - name: 📑 Upload CMake logs (if failure)
         uses: actions/upload-artifact@v4
@@ -100,9 +90,25 @@ jobs:
           mkdir -p sdk/qgis-sdk-debug/lib
           mkdir -p sdk/qgis-sdk-debug/include
           
-          # Copy debug libraries and binaries
-          cp -r build/output/bin/* sdk/qgis-sdk-debug/bin/ || echo "No binaries found"
-          cp -r build/output/lib/* sdk/qgis-sdk-debug/lib/ || echo "No libraries found"
+          # Copy libraries from MSYS2
+          echo "Copying PROJ libraries..."
+          cp -v /mingw64/bin/libproj-*.dll sdk/qgis-sdk-debug/bin/
+          cp -v /mingw64/lib/libproj.dll.a sdk/qgis-sdk-debug/lib/
+          
+          echo "Copying GDAL libraries..."
+          cp -v /mingw64/bin/libgdal-*.dll sdk/qgis-sdk-debug/bin/
+          cp -v /mingw64/lib/libgdal.dll.a sdk/qgis-sdk-debug/lib/
+          
+          # Copy built QGIS libraries if available
+          if [ -d "build/output/bin" ]; then
+            echo "Copying QGIS binaries..."
+            cp -v build/output/bin/* sdk/qgis-sdk-debug/bin/ || echo "No binaries found"
+          fi
+          
+          if [ -d "build/output/lib" ]; then
+            echo "Copying QGIS libraries..."
+            cp -v build/output/lib/* sdk/qgis-sdk-debug/lib/ || echo "No libraries found"
+          fi
           
           # Create README
           cat > sdk/qgis-sdk-debug/README.md << EOF
@@ -124,10 +130,3 @@ jobs:
           name: qgis-sdk-mingw-debug
           path: |
             qgis-sdk-mingw-debug.zip
-
-      - name: 📤 Upload debug bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: qgis-mingw-debug
-          path: |
-            build/*-win64.zip
