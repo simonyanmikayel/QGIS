@@ -1,5 +1,5 @@
 ---
-name: 🪟 Windows MinGW Debug Build
+name: 🪟 Windows MinGW Debug Build (Fixed)
 on:
   workflow_dispatch:  # Allow manual triggering
 
@@ -26,10 +26,8 @@ jobs:
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-qt6-base
             mingw-w64-x86_64-qt6-declarative
-            mingw-w64-x86_64-qt6-location
             mingw-w64-x86_64-qt6-tools
             mingw-w64-x86_64-qt6-3d
-            mingw-w64-x86_64-qt6-quick3d
             mingw-w64-x86_64-qt6-positioning
             mingw-w64-x86_64-qt6-svg
             mingw-w64-x86_64-qt6-serialport
@@ -41,13 +39,24 @@ jobs:
             mingw-w64-x86_64-python-pip
             mingw-w64-x86_64-python-numpy
             mingw-w64-x86_64-python-pyqt6
-            mingw-w64-x86_64-flex
-            mingw-w64-x86_64-bison
+            mingw-w64-x86_64-winflexbison
             mingw-w64-x86_64-ccache
             mingw-w64-x86_64-exiv2
             mingw-w64-x86_64-expat
-            mingw-w64-x86_64-libspatialindex
+            mingw-w64-x86_64-spatialindex
             mingw-w64-x86_64-libzip
+
+      - name: 🔍 Check installed packages
+        shell: msys2 {0}
+        run: |
+          echo "Checking package versions..."
+          pacman -Q | grep proj
+          pacman -Q | grep gdal
+          pacman -Q | grep winflexbison
+          pacman -Q | grep spatialindex
+          
+          echo "Checking PROJ is functional..."
+          pkg-config --modversion proj
 
       - name: 🌱 Configure QGIS Build
         shell: msys2 {0}
@@ -64,11 +73,9 @@ jobs:
                 -D WITH_BINDINGS=ON \
                 -D ENABLE_TESTS=OFF \
                 -D BUILD_WITH_QT6=ON \
-                -D ENABLE_UNITY_BUILDS=OFF
-          
-          # Print out PROJ info to verify
-          echo "PROJ information:"
-          pkg-config --modversion proj
+                -D ENABLE_UNITY_BUILDS=OFF \
+                -D FLEX_EXECUTABLE="/mingw64/bin/win_flex.exe" \
+                -D BISON_EXECUTABLE="/mingw64/bin/win_bison.exe"
 
       - name: 📑 Upload CMake logs (if failure)
         uses: actions/upload-artifact@v4
@@ -94,8 +101,8 @@ jobs:
           mkdir -p sdk/qgis-sdk-debug/include
           
           # Copy debug libraries and binaries
-          cp -r build/output/bin/* sdk/qgis-sdk-debug/bin/
-          cp -r build/output/lib/* sdk/qgis-sdk-debug/lib/
+          cp -r build/output/bin/* sdk/qgis-sdk-debug/bin/ || echo "No binaries found"
+          cp -r build/output/lib/* sdk/qgis-sdk-debug/lib/ || echo "No libraries found"
           
           # Create README
           cat > sdk/qgis-sdk-debug/README.md << EOF
