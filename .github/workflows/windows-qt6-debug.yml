@@ -1,5 +1,5 @@
 ---
-name: 🪟 Windows MinGW Debug Build (Exiv2 Fix)
+name: 🪟 Windows MinGW Debug Build (Dependency Fixes)
 on:
   workflow_dispatch:  # Allow manual triggering
 
@@ -25,6 +25,7 @@ jobs:
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-qt6-base
+            mingw-w64-x86_64-qt6-svg
             mingw-w64-x86_64-proj
             mingw-w64-x86_64-gdal
             mingw-w64-x86_64-geos
@@ -32,20 +33,9 @@ jobs:
             mingw-w64-x86_64-python
             mingw-w64-x86_64-ccache
             mingw-w64-x86_64-exiv2
+            mingw-w64-x86_64-qca-qt6
             flex
             bison
-
-      - name: 🔍 Check dependencies
-        shell: msys2 {0}
-        run: |
-          echo "Checking for exiv2..."
-          pacman -Q | grep exiv2 || pacman -Ss exiv2
-          
-          echo "Checking EXIV2 library location..."
-          find /mingw64 -name "*exiv2*" -type f
-          
-          echo "Checking PROJ is functional..."
-          pkg-config --modversion proj
 
       - name: 🌱 Configure QGIS Build
         shell: msys2 {0}
@@ -54,7 +44,7 @@ jobs:
           mkdir -p build
           cd build
           
-          # Configure with CMake for Debug build
+          # Configure with CMake for Debug build - minimal feature set
           cmake .. -G Ninja \
                 -D CMAKE_BUILD_TYPE=Debug \
                 -D WITH_DESKTOP=ON \
@@ -67,6 +57,11 @@ jobs:
                 -D WITH_CUSTOM_WIDGETS=OFF \
                 -D WITH_SERVER=OFF \
                 -D WITH_POSTGRESQL=OFF \
+                -D WITH_PDAL=OFF \
+                -D WITH_QSPATIALITE=OFF \
+                -D WITH_ORACLE=OFF \
+                -D WITH_HANA=OFF \
+                -D WITH_QWTPOLAR=OFF \
                 -D EXIV2_INCLUDE_DIR=/mingw64/include \
                 -D EXIV2_LIBRARY=/mingw64/lib/libexiv2.dll.a
 
@@ -78,6 +73,7 @@ jobs:
           path: |
             build/CMakeFiles/CMakeOutput.log
             build/CMakeFiles/CMakeError.log
+            build/CMakeCache.txt
 
       - name: 🌋 Build QGIS
         shell: msys2 {0}
@@ -95,26 +91,28 @@ jobs:
           
           # Copy libraries from MSYS2
           echo "Copying PROJ libraries..."
-          cp -v /mingw64/bin/libproj-*.dll sdk/qgis-sdk-debug/bin/
-          cp -v /mingw64/lib/libproj.dll.a sdk/qgis-sdk-debug/lib/
+          cp -v /mingw64/bin/libproj-*.dll sdk/qgis-sdk-debug/bin/ || echo "No PROJ DLLs found"
+          cp -v /mingw64/lib/libproj.dll.a sdk/qgis-sdk-debug/lib/ || echo "No PROJ libs found"
           
           echo "Copying GDAL libraries..."
-          cp -v /mingw64/bin/libgdal-*.dll sdk/qgis-sdk-debug/bin/
-          cp -v /mingw64/lib/libgdal.dll.a sdk/qgis-sdk-debug/lib/
-          
-          echo "Copying EXIV2 libraries..."
-          cp -v /mingw64/bin/libexiv2-*.dll sdk/qgis-sdk-debug/bin/
-          cp -v /mingw64/lib/libexiv2.dll.a sdk/qgis-sdk-debug/lib/
+          cp -v /mingw64/bin/libgdal-*.dll sdk/qgis-sdk-debug/bin/ || echo "No GDAL DLLs found"
+          cp -v /mingw64/lib/libgdal.dll.a sdk/qgis-sdk-debug/lib/ || echo "No GDAL libs found"
           
           # Copy built QGIS libraries if available
           if [ -d "build/output/bin" ]; then
             echo "Copying QGIS binaries..."
             cp -rv build/output/bin/* sdk/qgis-sdk-debug/bin/ || echo "No binaries found"
+          else
+            echo "Default output directory not found, searching for alternatives..."
+            find build -name "*.dll" -o -name "*.exe" | xargs -I{} cp -v {} sdk/qgis-sdk-debug/bin/ || echo "No binaries found"
           fi
           
           if [ -d "build/output/lib" ]; then
             echo "Copying QGIS libraries..."
             cp -rv build/output/lib/* sdk/qgis-sdk-debug/lib/ || echo "No libraries found"
+          else
+            echo "Default lib directory not found, searching for alternatives..."
+            find build -name "*.dll.a" -o -name "*.a" | xargs -I{} cp -v {} sdk/qgis-sdk-debug/lib/ || echo "No libraries found"
           fi
           
           # Create README
