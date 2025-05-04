@@ -1,0 +1,167 @@
+---
+name: 🪟 Windows Qt6 Debug Build (OSGeo4W-based)
+on:
+  workflow_dispatch:  # Allow manual triggering
+
+permissions:
+  packages: write
+
+jobs:
+  build:
+    name: build (windows debug)
+    runs-on: windows-2022
+
+    steps:
+      - name: 🐣 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: 🔨 Install build tools
+        shell: pwsh
+        run: |
+          choco install ninja cmake curl -y
+          refreshenv
+          ninja --version
+          cmake --version
+
+      - name: 🧽 Developer Command Prompt for Microsoft Visual C++
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: 📥 Download OSGeo4W Dependencies
+        shell: pwsh
+        run: |
+          mkdir -p osgeo4w_deps
+          # Download OSGeo4W installer
+          curl -L -o osgeo4w-setup.exe https://download.osgeo.org/osgeo4w/v2/osgeo4w-setup.exe
+          
+          # Create answer file for silent installation
+          @"
+          InstallMode=Advanced
+          Root=D:\a\QGIS\QGIS\osgeo4w_deps
+          Quiet=1
+          NoPostInstall=1
+          Packages=msys,flex,bison,qt6-devel,qt6-debug-symbols,gdal-devel,gdal-debugsym,proj-devel,geos-devel,sqlite3-devel
+          "@ | Out-File -FilePath "osgeo4w_install.bat" -Encoding ascii
+          
+          # Run OSGeo4W installer silently
+          ./osgeo4w-setup.exe --batch < osgeo4w_install.bat
+          
+          # Create environment setup script
+          @"
+          REM Setup OSGeo4W environment
+          CALL D:\a\QGIS\QGIS\osgeo4w_deps\bin\o4w_env.bat
+          SET PATH=D:\a\QGIS\QGIS\osgeo4w_deps\bin;%PATH%
+          SET OSGEO4W_ROOT=D:\a\QGIS\QGIS\osgeo4w_deps
+          "@ | Out-File -FilePath "setup_env.bat" -Encoding ascii
+
+      - name: 🦬 Setup flex/bison
+        uses: robinraju/release-downloader@v1.12
+        with:
+          repository: 'lexxmark/winflexbison'
+          fileName: '*.zip'
+          tag: 'v2.5.24'
+          extract: true
+
+      - name: 🌱 Configure QGIS Build
+        shell: pwsh
+        run: |
+          mkdir -p build
+          cd build
+          
+          # Source OSGeo4W environment
+          . ..\setup_env.bat
+          
+          # Configure with CMake
+          cmake .. -G Ninja `
+                -D CMAKE_BUILD_TYPE=Debug `
+                -D WITH_DESKTOP=ON `
+                -D WITH_3D=ON `
+                -D WITH_BINDINGS=ON `
+                -D ENABLE_TESTS=OFF `
+                -D BUILD_WITH_QT6=ON `
+                -D ENABLE_UNITY_BUILDS=OFF `
+                -D FLEX_EXECUTABLE="../win_flex.exe" `
+                -D BISON_EXECUTABLE="../win_bison.exe" `
+                -D WITH_QTWEBKIT=OFF `
+                -D OSGEO4W_ROOT="D:/a/QGIS/QGIS/osgeo4w_deps" `
+                -D WITH_INTERNAL_SPATIALITE=ON
+
+      - name: 🌋 Build QGIS
+        shell: pwsh
+        run: |
+          cd build
+          
+          # Source OSGeo4W environment
+          . ..\setup_env.bat
+          
+          # Build QGIS
+          cmake --build . --config Debug
+
+      - name: 📦 Package QGIS
+        shell: pwsh
+        run: |
+          cd build
+          
+          # Source OSGeo4W environment
+          . ..\setup_env.bat
+          
+          # Package QGIS
+          cmake --build . --target bundle --config Debug
+
+      - name: 📦 Create Debug SDK
+        shell: pwsh
+        run: |
+          # Create SDK directory structure
+          $sdkDir = "sdk/qgis-sdk-debug"
+          mkdir -p $sdkDir/bin,$sdkDir/lib,$sdkDir/include,$sdkDir/share
+          
+          # Copy debug libraries and binaries
+          if (Test-Path "build/output/bin/Debug") {
+            Copy-Item "build/output/bin/Debug/*" -Destination "$sdkDir/bin" -Recurse
+          }
+          
+          if (Test-Path "build/output/lib") {
+            Copy-Item "build/output/lib/*" -Destination "$sdkDir/lib" -Recurse
+          }
+          
+          # Copy OSGeo4W debug libraries
+          Copy-Item "osgeo4w_deps/bin/*.dll" -Destination "$sdkDir/bin" -Recurse
+          Copy-Item "osgeo4w_deps/lib/*.lib" -Destination "$sdkDir/lib" -Recurse
+          
+          # Add README
+          Set-Content -Path "$sdkDir/README.md" -Value @"
+          # QGIS Debug SDK
+          
+          This SDK contains debug builds of QGIS libraries and dependencies.
+          Built using GitHub Actions with OSGeo4W dependencies.
+          
+          Created: $(Get-Date -Format "yyyy-MM-dd")
+          "@ 
+          
+          # Create ZIP file
+          Compress-Archive -Path sdk/qgis-sdk-debug/* -DestinationPath qgis-sdk-x64-windows-debug.zip
+
+      - name: 📤 Upload debug SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: qgis-sdk-x64-windows-debug
+          path: |
+            qgis-sdk-x64-windows-debug.zip
+
+      - name: 📑 Upload build logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs-x64-windows-debug
+          path: |
+            build/CMakeFiles/CMakeOutput.log
+            build/CMakeFiles/CMakeError.log
+
+      - name: 📤 Upload debug bundle
+        uses: actions/upload-artifact@v4
+        id: artifact-win64-qt6-debug
+        with:
+          name: qgis-windows-qt6-debug
+          path: |
+            build/*-win64.zip
