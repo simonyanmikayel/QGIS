@@ -1,5 +1,5 @@
 ---
-name: 🪟 Windows MinGW Debug Build (Minimal)
+name: 🪟 Windows MinGW Debug Build (Exiv2 Fix)
 on:
   workflow_dispatch:  # Allow manual triggering
 
@@ -31,21 +31,21 @@ jobs:
             mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-python
             mingw-w64-x86_64-ccache
+            mingw-w64-x86_64-exiv2
             flex
             bison
 
-      - name: 🔍 Check available packages
+      - name: 🔍 Check dependencies
         shell: msys2 {0}
         run: |
-          echo "Searching for flex and bison packages..."
-          pacman -Ss flex
-          pacman -Ss bison
+          echo "Checking for exiv2..."
+          pacman -Q | grep exiv2 || pacman -Ss exiv2
+          
+          echo "Checking EXIV2 library location..."
+          find /mingw64 -name "*exiv2*" -type f
           
           echo "Checking PROJ is functional..."
           pkg-config --modversion proj
-          
-          echo "Current directory contents:"
-          ls -la
 
       - name: 🌱 Configure QGIS Build
         shell: msys2 {0}
@@ -54,7 +54,7 @@ jobs:
           mkdir -p build
           cd build
           
-          # Configure with CMake for Debug build - minimal config
+          # Configure with CMake for Debug build
           cmake .. -G Ninja \
                 -D CMAKE_BUILD_TYPE=Debug \
                 -D WITH_DESKTOP=ON \
@@ -65,7 +65,10 @@ jobs:
                 -D ENABLE_UNITY_BUILDS=OFF \
                 -D WITH_GRASS=OFF \
                 -D WITH_CUSTOM_WIDGETS=OFF \
-                -D WITH_SERVER=OFF
+                -D WITH_SERVER=OFF \
+                -D WITH_POSTGRESQL=OFF \
+                -D EXIV2_INCLUDE_DIR=/mingw64/include \
+                -D EXIV2_LIBRARY=/mingw64/lib/libexiv2.dll.a
 
       - name: 📑 Upload CMake logs (if failure)
         uses: actions/upload-artifact@v4
@@ -99,15 +102,19 @@ jobs:
           cp -v /mingw64/bin/libgdal-*.dll sdk/qgis-sdk-debug/bin/
           cp -v /mingw64/lib/libgdal.dll.a sdk/qgis-sdk-debug/lib/
           
+          echo "Copying EXIV2 libraries..."
+          cp -v /mingw64/bin/libexiv2-*.dll sdk/qgis-sdk-debug/bin/
+          cp -v /mingw64/lib/libexiv2.dll.a sdk/qgis-sdk-debug/lib/
+          
           # Copy built QGIS libraries if available
           if [ -d "build/output/bin" ]; then
             echo "Copying QGIS binaries..."
-            cp -v build/output/bin/* sdk/qgis-sdk-debug/bin/ || echo "No binaries found"
+            cp -rv build/output/bin/* sdk/qgis-sdk-debug/bin/ || echo "No binaries found"
           fi
           
           if [ -d "build/output/lib" ]; then
             echo "Copying QGIS libraries..."
-            cp -v build/output/lib/* sdk/qgis-sdk-debug/lib/ || echo "No libraries found"
+            cp -rv build/output/lib/* sdk/qgis-sdk-debug/lib/ || echo "No libraries found"
           fi
           
           # Create README
