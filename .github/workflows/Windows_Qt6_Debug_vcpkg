@@ -1,0 +1,155 @@
+---
+name: 🪟 Windows Qt6 Debug Build (Fixed vcpkg)
+on:
+  workflow_dispatch:  # Allow manual triggering
+
+permissions:
+  packages: write
+
+jobs:
+  build:
+    name: build (windows debug)
+    runs-on: windows-2022
+
+    steps:
+      - name: 🐣 Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: 🔨 Install build tools
+        shell: pwsh
+        run: |
+          choco install ninja cmake -y
+          refreshenv
+          ninja --version
+          cmake --version
+
+      - name: 🧽 Developer Command Prompt for Microsoft Visual C++
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: 🦬 Setup flex/bison
+        uses: robinraju/release-downloader@v1.12
+        with:
+          repository: 'lexxmark/winflexbison'
+          fileName: '*.zip'
+          tag: 'v2.5.24'
+          extract: true
+
+      - name: 📝 Fix Expat in vcpkg
+        shell: pwsh
+        run: |
+          # Create a pre-built expat library to avoid the vcpkg build issue
+          mkdir -p vcpkg/packages/expat_x64-windows
+          mkdir -p vcpkg/packages/expat_x64-windows/debug/lib/pkgconfig
+          mkdir -p vcpkg/packages/expat_x64-windows/include
+          
+          # Create empty expat_external.h file that's causing the issue
+          Set-Content -Path vcpkg/packages/expat_x64-windows/include/expat_external.h -Value @"
+          /* Workaround for vcpkg build issue */
+          #ifndef EXPAT_EXTERNAL_H
+          #define EXPAT_EXTERNAL_H
+          #define XML_STATIC
+          #endif
+          "@
+          
+          # Create a debug triplet file
+          mkdir -p vcpkg/triplets
+          Set-Content -Path vcpkg/triplets/x64-windows.cmake -Value @"
+          set(VCPKG_TARGET_ARCHITECTURE x64)
+          set(VCPKG_CRT_LINKAGE dynamic)
+          set(VCPKG_LIBRARY_LINKAGE dynamic)
+          set(VCPKG_BUILD_TYPE debug)
+          "@
+
+      - name: 🌱 Configure QGIS Build
+        shell: pwsh
+        run: |
+          # Set build environment variables
+          $env:VCPKG_FEATURE_FLAGS = "-binarycaching"  # Disable binary caching
+          $env:VCPKG_MAX_CONCURRENCY = "1"  # Limit concurrency
+          
+          # Configure with CMake - WITH_VCPKG=OFF to avoid dependency issues
+          mkdir -p build
+          cd build
+          cmake .. -G Ninja `
+                -D CMAKE_BUILD_TYPE=Debug `
+                -D WITH_VCPKG=OFF `
+                -D WITH_DESKTOP=ON `
+                -D WITH_3D=OFF `
+                -D WITH_BINDINGS=OFF `
+                -D ENABLE_TESTS=OFF `
+                -D BUILD_WITH_QT6=ON `
+                -D ENABLE_UNITY_BUILDS=OFF `
+                -D FLEX_EXECUTABLE="../win_flex.exe" `
+                -D BISON_EXECUTABLE="../win_bison.exe" `
+                -D WITH_QTWEBKIT=OFF `
+                -D WITH_INTERNAL_SPATIALITE=ON `
+                -D WITH_INTERNAL_SQLITE3=ON `
+                -D WITH_INTERNAL_EXPAT=ON
+
+      - name: 📑 Upload CMake logs (after failure)
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: cmake-logs
+          path: |
+            build/CMakeFiles/CMakeOutput.log
+            build/CMakeFiles/CMakeError.log
+            build/CMakeFiles/CMakeCache.txt
+
+      - name: 🌋 Build QGIS
+        shell: pwsh
+        run: |
+          cd build
+          cmake --build . --config Debug
+
+      - name: 📦 Package QGIS
+        shell: pwsh
+        run: |
+          cd build
+          cmake --build . --target bundle --config Debug
+
+      - name: 📦 Create Debug SDK
+        shell: pwsh
+        run: |
+          # Create SDK directory structure
+          $sdkDir = "sdk/qgis-sdk-debug"
+          mkdir -p $sdkDir/bin,$sdkDir/lib,$sdkDir/include,$sdkDir/share
+          
+          # Copy debug libraries and binaries
+          if (Test-Path "build/output/bin/Debug") {
+            Copy-Item "build/output/bin/Debug/*" -Destination "$sdkDir/bin" -Recurse
+          }
+          
+          if (Test-Path "build/output/lib") {
+            Copy-Item "build/output/lib/*" -Destination "$sdkDir/lib" -Recurse
+          }
+          
+          # Add README
+          Set-Content -Path "$sdkDir/README.md" -Value @"
+          # QGIS Debug SDK
+          
+          This SDK contains debug builds of QGIS libraries and dependencies.
+          Built using GitHub Actions with internal libraries.
+          
+          Created: $(Get-Date -Format "yyyy-MM-dd")
+          "@ 
+          
+          # Create ZIP file
+          Compress-Archive -Path sdk/qgis-sdk-debug/* -DestinationPath qgis-sdk-x64-windows-debug.zip
+
+      - name: 📤 Upload debug SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: qgis-sdk-x64-windows-debug
+          path: |
+            qgis-sdk-x64-windows-debug.zip
+
+      - name: 📤 Upload debug bundle
+        uses: actions/upload-artifact@v4
+        id: artifact-win64-qt6-debug
+        with:
+          name: qgis-windows-qt6-debug
+          path: |
+            build/*-win64.zip
