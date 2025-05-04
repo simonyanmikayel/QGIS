@@ -1,5 +1,5 @@
 ---
-name: 🪟 Windows Qt6 Debug Build (Fixed vcpkg)
+name: 🪟 Windows Qt6 Debug Build (Fixed)
 on:
   workflow_dispatch:  # Allow manual triggering
 
@@ -36,13 +36,11 @@ jobs:
           tag: 'v2.5.24'
           extract: true
 
-      - name: 📝 Fix Expat in vcpkg
+      - name: 📝 Fix Expat and Configure Debug Triplet
         shell: pwsh
         run: |
           # Create a pre-built expat library to avoid the vcpkg build issue
-          mkdir -p vcpkg/packages/expat_x64-windows
-          mkdir -p vcpkg/packages/expat_x64-windows/debug/lib/pkgconfig
-          mkdir -p vcpkg/packages/expat_x64-windows/include
+          mkdir -p vcpkg/packages/expat_x64-windows/include -ErrorAction SilentlyContinue
           
           # Create empty expat_external.h file that's causing the issue
           Set-Content -Path vcpkg/packages/expat_x64-windows/include/expat_external.h -Value @"
@@ -53,14 +51,21 @@ jobs:
           #endif
           "@
           
-          # Create a debug triplet file
-          mkdir -p vcpkg/triplets
+          # Create or update the debug triplet file
+          if (-not (Test-Path "vcpkg/triplets")) {
+            Write-Host "Creating triplets directory"
+            mkdir -p vcpkg/triplets -ErrorAction SilentlyContinue
+          }
+          
           Set-Content -Path vcpkg/triplets/x64-windows.cmake -Value @"
           set(VCPKG_TARGET_ARCHITECTURE x64)
           set(VCPKG_CRT_LINKAGE dynamic)
           set(VCPKG_LIBRARY_LINKAGE dynamic)
           set(VCPKG_BUILD_TYPE debug)
           "@
+          
+          Write-Host "Debug triplet file created/updated:"
+          Get-Content -Path vcpkg/triplets/x64-windows.cmake
 
       - name: 🌱 Configure QGIS Build
         shell: pwsh
@@ -69,9 +74,18 @@ jobs:
           $env:VCPKG_FEATURE_FLAGS = "-binarycaching"  # Disable binary caching
           $env:VCPKG_MAX_CONCURRENCY = "1"  # Limit concurrency
           
-          # Configure with CMake - WITH_VCPKG=OFF to avoid dependency issues
-          mkdir -p build
+          # Check directories before build
+          Write-Host "Content of vcpkg directory:"
+          Get-ChildItem -Path vcpkg -Depth 1
+          
+          Write-Host "Content of vcpkg/triplets directory:"
+          Get-ChildItem -Path vcpkg/triplets
+          
+          # Configure with CMake - minimal configuration with internal libraries
+          New-Item -ItemType Directory -Path build -Force
           cd build
+          
+          Write-Host "Running CMake configuration..."
           cmake .. -G Ninja `
                 -D CMAKE_BUILD_TYPE=Debug `
                 -D WITH_VCPKG=OFF `
@@ -86,7 +100,9 @@ jobs:
                 -D WITH_QTWEBKIT=OFF `
                 -D WITH_INTERNAL_SPATIALITE=ON `
                 -D WITH_INTERNAL_SQLITE3=ON `
-                -D WITH_INTERNAL_EXPAT=ON
+                -D WITH_INTERNAL_EXPAT=ON `
+                -D WITH_GRASS=OFF `
+                -D WITH_CUSTOM_WIDGETS=OFF
 
       - name: 📑 Upload CMake logs (after failure)
         uses: actions/upload-artifact@v4
@@ -96,7 +112,7 @@ jobs:
           path: |
             build/CMakeFiles/CMakeOutput.log
             build/CMakeFiles/CMakeError.log
-            build/CMakeFiles/CMakeCache.txt
+            build/CMakeCache.txt
 
       - name: 🌋 Build QGIS
         shell: pwsh
@@ -115,15 +131,22 @@ jobs:
         run: |
           # Create SDK directory structure
           $sdkDir = "sdk/qgis-sdk-debug"
-          mkdir -p $sdkDir/bin,$sdkDir/lib,$sdkDir/include,$sdkDir/share
+          New-Item -ItemType Directory -Path $sdkDir/bin,$sdkDir/lib,$sdkDir/include,$sdkDir/share -Force
           
           # Copy debug libraries and binaries
           if (Test-Path "build/output/bin/Debug") {
-            Copy-Item "build/output/bin/Debug/*" -Destination "$sdkDir/bin" -Recurse
+            Copy-Item -Path "build/output/bin/Debug/*" -Destination "$sdkDir/bin" -Recurse -Force
+            Write-Host "Copied debug binaries"
+          } else {
+            Write-Host "Debug binaries not found at build/output/bin/Debug"
+            Get-ChildItem -Path build/output -Recurse -Depth 2
           }
           
           if (Test-Path "build/output/lib") {
-            Copy-Item "build/output/lib/*" -Destination "$sdkDir/lib" -Recurse
+            Copy-Item -Path "build/output/lib/*" -Destination "$sdkDir/lib" -Recurse -Force
+            Write-Host "Copied libraries"
+          } else {
+            Write-Host "Libraries not found at build/output/lib"
           }
           
           # Add README
@@ -137,7 +160,7 @@ jobs:
           "@ 
           
           # Create ZIP file
-          Compress-Archive -Path sdk/qgis-sdk-debug/* -DestinationPath qgis-sdk-x64-windows-debug.zip
+          Compress-Archive -Path "$sdkDir/*" -DestinationPath qgis-sdk-x64-windows-debug.zip -Force
 
       - name: 📤 Upload debug SDK
         uses: actions/upload-artifact@v4
