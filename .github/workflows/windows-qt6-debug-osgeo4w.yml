@@ -35,17 +35,8 @@ jobs:
           # Download OSGeo4W installer
           curl -L -o osgeo4w-setup.exe https://download.osgeo.org/osgeo4w/v2/osgeo4w-setup.exe
           
-          # Create answer file for silent installation
-          @"
-          InstallMode=Advanced
-          Root=D:\a\QGIS\QGIS\osgeo4w_deps
-          Quiet=1
-          NoPostInstall=1
-          Packages=msys,flex,bison,qt6-devel,qt6-debug-symbols,gdal-devel,gdal-debugsym,proj-devel,geos-devel,sqlite3-devel
-          "@ | Out-File -FilePath "osgeo4w_install.bat" -Encoding ascii
-          
-          # Run OSGeo4W installer silently
-          ./osgeo4w-setup.exe --batch < osgeo4w_install.bat
+          # Run OSGeo4W installer with command-line arguments instead of redirecting
+          ./osgeo4w-setup.exe --quiet-mode --root=D:/a/QGIS/QGIS/osgeo4w_deps --advanced --no-desktop --no-shortcuts --no-startmenu --packages=msys,flex,bison,qt6-devel,qt6-debug-symbols,gdal-devel,gdal-debugsym,proj-devel,geos-devel,sqlite3-devel
           
           # Create environment setup script
           @"
@@ -64,49 +55,49 @@ jobs:
           extract: true
 
       - name: 🌱 Configure QGIS Build
-        shell: pwsh
+        shell: cmd
         run: |
-          mkdir -p build
+          mkdir build
           cd build
           
-          # Source OSGeo4W environment
-          . ..\setup_env.bat
+          REM Source OSGeo4W environment
+          CALL ..\setup_env.bat
           
-          # Configure with CMake
-          cmake .. -G Ninja `
-                -D CMAKE_BUILD_TYPE=Debug `
-                -D WITH_DESKTOP=ON `
-                -D WITH_3D=ON `
-                -D WITH_BINDINGS=ON `
-                -D ENABLE_TESTS=OFF `
-                -D BUILD_WITH_QT6=ON `
-                -D ENABLE_UNITY_BUILDS=OFF `
-                -D FLEX_EXECUTABLE="../win_flex.exe" `
-                -D BISON_EXECUTABLE="../win_bison.exe" `
-                -D WITH_QTWEBKIT=OFF `
-                -D OSGEO4W_ROOT="D:/a/QGIS/QGIS/osgeo4w_deps" `
+          REM Configure with CMake
+          cmake .. -G Ninja ^
+                -D CMAKE_BUILD_TYPE=Debug ^
+                -D WITH_DESKTOP=ON ^
+                -D WITH_3D=ON ^
+                -D WITH_BINDINGS=ON ^
+                -D ENABLE_TESTS=OFF ^
+                -D BUILD_WITH_QT6=ON ^
+                -D ENABLE_UNITY_BUILDS=OFF ^
+                -D FLEX_EXECUTABLE="../win_flex.exe" ^
+                -D BISON_EXECUTABLE="../win_bison.exe" ^
+                -D WITH_QTWEBKIT=OFF ^
+                -D OSGEO4W_ROOT="D:/a/QGIS/QGIS/osgeo4w_deps" ^
                 -D WITH_INTERNAL_SPATIALITE=ON
 
       - name: 🌋 Build QGIS
-        shell: pwsh
+        shell: cmd
         run: |
           cd build
           
-          # Source OSGeo4W environment
-          . ..\setup_env.bat
+          REM Source OSGeo4W environment
+          CALL ..\setup_env.bat
           
-          # Build QGIS
+          REM Build QGIS
           cmake --build . --config Debug
 
       - name: 📦 Package QGIS
-        shell: pwsh
+        shell: cmd
         run: |
           cd build
           
-          # Source OSGeo4W environment
-          . ..\setup_env.bat
+          REM Source OSGeo4W environment
+          CALL ..\setup_env.bat
           
-          # Package QGIS
+          REM Package QGIS
           cmake --build . --target bundle --config Debug
 
       - name: 📦 Create Debug SDK
